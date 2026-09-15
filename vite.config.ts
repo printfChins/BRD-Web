@@ -5,17 +5,22 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    // [新增] GitHub Pages 專案網址為 /BRD-Web/，Build 後資源路徑必須帶入此 Base Path。
+    base: '/BRD-Web/',
+
     plugins: [react(), tailwindcss()],
+
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
     },
+
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // [保留] AI Studio 使用 DISABLE_HMR 控制 HMR。
       hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
+
+      // [保留] DISABLE_HMR=true 時關閉檔案監看。
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };
