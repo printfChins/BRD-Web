@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { Gauge, Maximize2, MoveHorizontal } from 'lucide-react';
+import { Gauge } from 'lucide-react';
 import { RpmSample } from '../types';
 
 interface RpmChartProps {
@@ -30,7 +30,6 @@ export const RpmChart: React.FC<RpmChartProps> = ({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [containerWidth, setContainerWidth] = useState<number>(0);
-  const [viewMode, setViewMode] = useState<'fit' | 'scroll'>('fit');
 
   // 監聽外層容器寬度，確保手機板圖表完全自適應且無被截斷
   useEffect(() => {
@@ -128,21 +127,10 @@ export const RpmChart: React.FC<RpmChartProps> = ({
     return { xMin, xMax, yMin, yMax, maxSample };
   }, [chartSamples, maxRpm, maxTimeMs, launchTimeMs, launchRpm, launchMarkerValid]);
 
-  // 動態寬度計算：預設 'fit' 模式下，寬度完全吻合外層容器寬度，手機端 100% 完整顯示無切邊
+  // 動態寬度計算：全幅完整顯示模式，寬度完全吻合外層容器寬度，手機與電腦端 100% 自適應完整顯示
   const width = useMemo(() => {
-    if (chartSamples.length === 0) {
-      return containerWidth > 0 ? containerWidth : 800;
-    }
-    if (viewMode === 'fit') {
-      return Math.max(containerWidth > 0 ? containerWidth : 320, 280);
-    }
-    // 滾動模式：依據數據持續時間（秒）展開
-    const durationMs = stats.xMax - stats.xMin;
-    const durationSec = durationMs / 1000;
-    const pixelPerSecond = isMobile ? 100 : 150;
-    const calculatedWidth = Math.round(durationSec * pixelPerSecond) + padding.left + padding.right;
-    return Math.max(containerWidth > 0 ? containerWidth : 800, calculatedWidth);
-  }, [chartSamples, viewMode, containerWidth, stats.xMax, stats.xMin, isMobile, padding.left, padding.right]);
+    return Math.max(containerWidth > 0 ? containerWidth : 800, 280);
+  }, [containerWidth]);
 
   const chartWidth = Math.max(width - padding.left - padding.right, 50);
   const chartHeight = Math.max(height - padding.top - padding.bottom, 50);
@@ -272,42 +260,20 @@ export const RpmChart: React.FC<RpmChartProps> = ({
           <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(34,211,238,0.8)] shrink-0"></span>
           <span className="truncate">{activeLabel}</span>
         </h3>
-        <div className="flex items-center justify-between sm:justify-end gap-2.5 text-xs font-mono text-slate-400">
-          <button
-            type="button"
-            id="btn-chart-view-mode"
-            onClick={() => setViewMode(viewMode === 'fit' ? 'scroll' : 'fit')}
-            className="px-2.5 py-1 rounded-lg border text-[11px] font-sans font-semibold flex items-center gap-1.5 transition-all cursor-pointer bg-slate-900 border-slate-800 hover:border-cyan-500/40 text-slate-300 active:scale-95 shadow-sm"
-            title={viewMode === 'fit' ? '切換為橫向滾動展開模式' : '切換為全螢幕適應完整顯示'}
-          >
-            {viewMode === 'fit' ? (
-              <>
-                <Maximize2 className="w-3.5 h-3.5 text-cyan-400" />
-                <span className="hidden xs:inline">完整顯示</span>
-                <span className="xs:hidden">全幅</span>
-              </>
-            ) : (
-              <>
-                <MoveHorizontal className="w-3.5 h-3.5 text-amber-400" />
-                <span>展開滾動</span>
-              </>
-            )}
-          </button>
-          <div className="flex items-center gap-2.5">
-            <span className="flex items-center gap-1 text-[11px]">
-              <span className="w-2 h-1.5 rounded-full bg-cyan-500"></span>
-              RPM
+        <div className="flex items-center gap-2.5 text-xs font-mono text-slate-400">
+          <span className="flex items-center gap-1 text-[11px]">
+            <span className="w-2 h-1.5 rounded-full bg-cyan-500"></span>
+            RPM
+          </span>
+          {chartSamples.length > 0 && (
+            <span className="text-[11px]">
+              點數: <strong className="text-cyan-400 font-bold">{chartSamples.length}</strong>
             </span>
-            {chartSamples.length > 0 && (
-              <span className="text-[11px]">
-                點數: <strong className="text-cyan-400 font-bold">{chartSamples.length}</strong>
-              </span>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
-      <div className={`relative w-full pb-2 ${viewMode === 'fit' ? 'overflow-visible' : 'overflow-x-auto scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent'}`}>
+      <div className="relative w-full pb-2 overflow-visible">
         {chartSamples.length === 0 ? (
           // 空資料狀態
           <div id="chart-empty-state" className="flex flex-col items-center justify-center h-[260px] sm:h-[350px] bg-slate-950/20 rounded-xl border border-dashed border-slate-900 p-6 text-center min-w-[260px]">
@@ -326,8 +292,8 @@ export const RpmChart: React.FC<RpmChartProps> = ({
             ref={svgRef}
             viewBox={`0 0 ${width} ${height}`}
             style={{
-              width: viewMode === 'fit' ? '100%' : `${width}px`,
-              minWidth: viewMode === 'fit' ? '100%' : `${width}px`,
+              width: '100%',
+              minWidth: '100%',
               height: `${height}px`,
             }}
             className="select-none overflow-visible shrink-0 block touch-none"

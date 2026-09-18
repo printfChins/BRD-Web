@@ -45,6 +45,8 @@ import {
   CheckCircle,
   Info,
   Trash2,
+  Square,
+  Clock,
 } from 'lucide-react';
 
 interface LogEntry {
@@ -125,6 +127,109 @@ export default function App() {
   // 戰鬥歷史紀錄
   const [history, setHistory] = useState<SpinRecord[]>([]);
 
+  // 發射計時器狀態 (裝載後變為 LOW 未裝載時觸發計時，直到下次裝載才歸零或按下暫停鍵)
+  const [spinDurationMs, setSpinDurationMs] = useState<number>(0);
+  const [isSpinTiming, setIsSpinTiming] = useState<boolean>(false);
+  const spinStartTimeRef = useRef<number | null>(null);
+  const isSpinTimingRef = useRef<boolean>(false);
+  const spinTimerIntervalRef = useRef<any>(null);
+  const manualSpinDurationRef = useRef<number | null>(null);
+
+  const startSpinTimer = (initialElapsedMs: number = 0) => {
+    isSpinTimingRef.current = true;
+    setIsSpinTiming(true);
+    spinStartTimeRef.current = Date.now() - initialElapsedMs;
+    setSpinDurationMs(initialElapsedMs);
+    manualSpinDurationRef.current = null;
+
+    if (spinTimerIntervalRef.current) {
+      clearInterval(spinTimerIntervalRef.current);
+    }
+    spinTimerIntervalRef.current = setInterval(() => {
+      if (spinStartTimeRef.current && isSpinTimingRef.current) {
+        setSpinDurationMs(Date.now() - spinStartTimeRef.current);
+      }
+    }, 50);
+  };
+
+  const stopSpinTimer = (finalMs?: number) => {
+    isSpinTimingRef.current = false;
+    setIsSpinTiming(false);
+    if (spinTimerIntervalRef.current) {
+      clearInterval(spinTimerIntervalRef.current);
+      spinTimerIntervalRef.current = null;
+    }
+    if (finalMs !== undefined && finalMs > 0) {
+      setSpinDurationMs(finalMs);
+    } else if (spinStartTimeRef.current) {
+      setSpinDurationMs(Date.now() - spinStartTimeRef.current);
+    }
+  };
+
+  const resetSpinTimer = () => {
+    isSpinTimingRef.current = false;
+    setIsSpinTiming(false);
+    spinStartTimeRef.current = null;
+    manualSpinDurationRef.current = null;
+    if (spinTimerIntervalRef.current) {
+      clearInterval(spinTimerIntervalRef.current);
+      spinTimerIntervalRef.current = null;
+    }
+    setSpinDurationMs(0);
+  };
+
+  // 按下停止鍵：停止計時並將旋轉時間儲存於曲線紀錄中（無法再繼續）
+  const handleStopSpinTimer = () => {
+    if (!isSpinTiming && spinDurationMs <= 0) return;
+
+    let finalMs = spinDurationMs;
+    if (spinStartTimeRef.current && isSpinTimingRef.current) {
+      finalMs = Date.now() - spinStartTimeRef.current;
+    }
+    stopSpinTimer(finalMs);
+    manualSpinDurationRef.current = finalMs;
+
+    // 若當前已有曲線紀錄 (activeRecord)，立即更新其旋轉時間並持久化至歷史紀錄 (localStorage)
+    if (activeRecord) {
+      const updatedRecord: SpinRecord = {
+        ...activeRecord,
+        durationMs: finalMs,
+      };
+      setActiveRecord(updatedRecord);
+      setHistory((prevHistory) => {
+        const updated = prevHistory.map((rec) =>
+          rec.id === activeRecord.id ? { ...rec, durationMs: finalMs } : rec
+        );
+        saveHistoryToStorage(updated);
+        return updated;
+      });
+      addLog(`[SYSTEM] 手動停止計時：${formatSpinDuration(finalMs)}，已成功寫入當前戰鬥曲線紀錄。`);
+    } else {
+      addLog(`[SYSTEM] 手動停止計時：${formatSpinDuration(finalMs)}，將在接收到曲線後自動儲存。`);
+    }
+  };
+
+  // 碼表計時格式化 (00:00.00，無資料時為 --:--.--)
+  const formatStopwatchTime = (ms: number | undefined | null): string => {
+    if (ms === undefined || ms === null || ms < 0) return '--:--.--';
+    const totalHundredths = Math.floor(ms / 10);
+    const hundredths = totalHundredths % 100;
+    const totalSeconds = Math.floor(totalHundredths / 100);
+    const seconds = totalSeconds % 60;
+    const minutes = Math.floor(totalSeconds / 60);
+
+    const mm = String(minutes).padStart(2, '0');
+    const ss = String(seconds).padStart(2, '0');
+    const xx = String(hundredths).padStart(2, '0');
+
+    return `${mm}:${ss}.${xx}`;
+  };
+
+  const formatSpinDuration = (ms: number): string => {
+    if (ms <= 0) return '--:--.--';
+    return formatStopwatchTime(ms);
+  };
+
   // 系統事件/封包傳輸日誌
   const [systemLogs, setSystemLogs] = useState<LogEntry[]>([
     {
@@ -202,6 +307,11 @@ export default function App() {
     } catch (e) {
       console.error('無法自 localStorage 讀取歷史紀錄', e);
     }
+    return () => {
+      if (spinTimerIntervalRef.current) {
+        clearInterval(spinTimerIntervalRef.current);
+      }
+    };
   }, []);
 
   const saveHistoryToStorage = (newHistory: SpinRecord[]) => {
@@ -523,6 +633,7 @@ export default function App() {
     hasCompletedCurveRef.current = false;
     lastDeviceStateRef.current = DeviceState.WAIT_LOAD;
     lastLoadedRef.current = false;
+    resetSpinTimer();
 
     tempSamplesRef.current = [];
     packetMapRef.current.clear();
@@ -573,10 +684,17 @@ export default function App() {
 
         // 偵測是否為「再次裝載」的邊緣觸發
         const isReloadEdge = !prevLoaded && isLoadedNow;
+        // 偵測是否為「發射成功」：裝載後變為 LOW (未裝載)
+        const isLaunchEdge = prevLoaded && !isLoadedNow;
+
+        // 判斷是否有收到轉速變化 (即時轉速 > 0 或 極速 > 0)
+        const hasRpmActivity = (live.currentRpm > 0) || (live.maxRpm > 0);
 
         // 依據 V1.15 狀態切換 UI 呈現模式：曲線收到後且再次裝載才歸零介面
         if (isLoadedNow) {
           setIsLaunchedMode(false);
+          resetSpinTimer();
+
           // 曲線收到後且再次裝載（或先前有舊曲線/發射紀錄殘留），才進行介面與曲線歸零
           if (isReloadEdge || hasCompletedCurveRef.current) {
             hasCompletedCurveRef.current = false;
@@ -596,13 +714,30 @@ export default function App() {
             setSampleIntervalMs(0);
             setExpectedDurationMs(0);
             setCurveError(null);
-            addLog('[SYSTEM] 檢測到再次裝載陀螺 (LOADED_READY)，介面與曲線已歸零，等待下次發射。');
+            addLog('[SYSTEM] 檢測到再次裝載陀螺 (LOADED_READY)，介面與計時已歸零，等待下次發射。');
           }
-        } else if (newState === DeviceState.SPINNING_LAUNCHED || newState === DeviceState.RESULT_PENDING) {
-          setIsLaunchedMode(true);
-        } else if (newState === DeviceState.WAIT_LOAD) {
-          // WAIT_LOAD (未裝載/量測結束後回到待命)：嚴格保留接收到的曲線與統計供檢視，不提早歸零
-          setIsLaunchedMode(false);
+        } else {
+          // 未裝載狀態 (LOW)
+          if (isLaunchEdge || newState === DeviceState.SPINNING_LAUNCHED) {
+            setIsLaunchedMode(true);
+            // 只有在收到轉速變化 (RPM > 0) 時才啟動旋轉計時器；若無轉速變化則不啟用
+            if (hasRpmActivity && !isSpinTimingRef.current && manualSpinDurationRef.current === null) {
+              startSpinTimer(live.elapsedMs || 0);
+              addLog(`[SYSTEM] 陀螺發射且偵測到轉速 (${live.currentRpm} RPM, Peak: ${live.maxRpm} RPM)，開始旋轉計時。`);
+            }
+          }
+
+          if (newState === DeviceState.SPINNING_LAUNCHED) {
+            setIsLaunchedMode(true);
+            if (hasRpmActivity && !isSpinTimingRef.current && manualSpinDurationRef.current === null) {
+              startSpinTimer(live.elapsedMs || 0);
+            }
+          } else if (newState === DeviceState.RESULT_PENDING) {
+            setIsLaunchedMode(true);
+          } else if (newState === DeviceState.WAIT_LOAD) {
+            // WAIT_LOAD (未裝載/量測結束後回到待命)：嚴格保留接收到的曲線與統計供檢視，不提早歸零
+            setIsLaunchedMode(false);
+          }
         }
 
         const stateLabels: Record<number, string> = {
@@ -623,11 +758,12 @@ export default function App() {
         setLastLaunchEvent(launch);
         lastLaunchEventRef.current = launch;
         setIsLaunchedMode(true);
+        const hasLaunchRpm = (launch.launchRpm > 0) || (launch.maxRpmAtLaunch > 0);
+        // 若有收到轉速數值才啟用計時
+        if (hasLaunchRpm && !isSpinTimingRef.current && manualSpinDurationRef.current === null) {
+          startSpinTimer(launch.launchTimeMs || 0);
+        }
         addLog(`[0xB2] LAUNCH: RPM=${launch.launchRpm}, PeakAtLaunch=${launch.maxRpmAtLaunch}, Time=${launch.launchTimeMs}ms`);
-        setToast({
-          message: `偵測到陀螺發射事件！發射轉速: ${launch.launchRpm.toLocaleString()} RPM`,
-          type: 'success',
-        });
         break;
       }
 
@@ -799,7 +935,11 @@ export default function App() {
         const maxRpm = Math.max(...rpms, startMaxRpm);
         const sumRpm = rpms.reduce((acc, val) => acc + val, 0);
         const avgRpm = rpms.length > 0 ? Math.round(sumRpm / rpms.length) : 0;
-        const durationMs = finalSamples[finalSamples.length - 1].timeMs - finalSamples[0].timeMs;
+
+        // 若使用者沒有按下暫停鍵，則不儲存旋轉時間 (為 undefined，顯示 --)；按下暫停才儲存
+        const recordedDuration = (manualSpinDurationRef.current !== null && manualSpinDurationRef.current > 0)
+          ? manualSpinDurationRef.current
+          : undefined;
 
         const uniqueId = `${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
         const recordName = `戰鬥紀錄 #${uniqueId.slice(-4)}`;
@@ -809,7 +949,7 @@ export default function App() {
           name: recordName,
           maxRpm,
           avgRpm,
-          durationMs,
+          durationMs: recordedDuration,
           samples: finalSamples,
           totalSamplesExpected: expectedSampleCount,
           maxTimeMs: activeCurveInfoRef.current?.maxTimeMs,
@@ -862,10 +1002,7 @@ export default function App() {
         addLog(`[0xA4] TRANSFER_STATUS: ${st.statusName} (0x${st.status.toString(16).toUpperCase()}), Session #${st.sessionId}, Detail=${st.detail}${detailDesc}`);
 
         if (st.status === TransferStatusCode.ACK_ACCEPTED) {
-          setToast({
-            message: `傳輸完成！裝置已確認 ACK (Session #${st.sessionId})`,
-            type: 'success',
-          });
+          // 靜默完成，不彈出 Toast 提示避免遮擋畫面，相關資訊已記錄於系統日誌中
         } else if (st.status === TransferStatusCode.RETRY_ACCEPTED) {
           addLog(`[0xA4] 裝置已接受選擇性重傳請求，將重發 ${st.detail} 個 A2 封包...`);
         } else if (st.status === TransferStatusCode.RESTART_ACCEPTED) {
@@ -970,47 +1107,46 @@ export default function App() {
     e.target.value = '';
   };
 
+  // 韌體版本格式化
+  const formatFirmwareVersion = (fw: string) => {
+    if (!fw) return 'FW V1.15';
+    const clean = fw.trim();
+    if (clean.toUpperCase().startsWith('FW')) return clean;
+    if (clean.toUpperCase().startsWith('V')) return `FW ${clean}`;
+    return `FW V${clean}`;
+  };
+
   // 獲取狀態標籤顯示
   const getStatusDisplay = () => {
     switch (status) {
       case ConnectionStatus.SCANNING:
         return {
-          text: '正在掃描尋找裝置中...',
-          subText: '過濾名稱字首為 "BRD_"',
+          text: '正在搜尋裝置...',
+          subText: '',
           dotClass: 'bg-blue-400 animate-ping',
         };
       case ConnectionStatus.CONNECTING:
         return {
           text: `連線中: ${connectedDeviceName}`,
-          subText: '正在建立 GATT 連線並訂閱 0002 資料特徵值...',
+          subText: '',
           dotClass: 'bg-amber-400',
         };
       case ConnectionStatus.RECEIVING:
-        const percent = expectedSamplesCount > 0 
-          ? Math.min(Math.round((receivedSamplesCount / expectedSamplesCount) * 100), 100)
-          : 0;
         return {
           text: `正在接收資料: ${receivedSamplesCount} / ${expectedSamplesCount} 點`,
-          subText: `二進位封包傳輸中 (${percent}%)，請稍候...`,
+          subText: formatFirmwareVersion(firmwareVersion),
           dotClass: 'bg-pink-400 animate-bounce',
         };
       case ConnectionStatus.CONNECTED:
-        const stateNameMap: Record<number, string> = {
-          [DeviceState.WAIT_LOAD]: '等待裝載 (WAIT_LOAD)',
-          [DeviceState.LOADED_READY]: '就緒 (LOADED_READY)',
-          [DeviceState.SPINNING_LOADED]: '預轉 (SPINNING_LOADED)',
-          [DeviceState.SPINNING_LAUNCHED]: '發射量測中 (SPINNING_LAUNCHED)',
-          [DeviceState.RESULT_PENDING]: '結果待傳送 (RESULT_PENDING)',
-        };
         return {
           text: `已連線: ${connectedDeviceName}`,
-          subText: `${stateNameMap[deviceState] || '就緒'} ${firmwareVersion ? `| FW ${firmwareVersion}` : ''}`,
+          subText: formatFirmwareVersion(firmwareVersion),
           dotClass: 'bg-emerald-400 animate-pulse',
         };
       case ConnectionStatus.ERROR:
         return {
           text: '藍牙連線異常',
-          subText: errorMessage || '未知的藍牙通訊失敗',
+          subText: '',
           dotClass: 'bg-rose-500',
         };
       case ConnectionStatus.DISCONNECTED:
@@ -1019,9 +1155,7 @@ export default function App() {
           text: !isBluetoothSupported
             ? (isIOSDevice ? 'iPad / iOS 提示 (需專用 BLE 瀏覽器)' : '未開啟原生 Web BLE')
             : '尚未連線',
-          subText: !isBluetoothSupported
-            ? '請點擊【搜尋藍牙裝置】查看 iPad / WebBLE 指引'
-            : '請點擊按鈕搜尋 BRD_ 裝置並連線',
+          subText: '請點擊按鈕搜尋',
           dotClass: !isBluetoothSupported ? 'bg-amber-400 animate-pulse' : 'bg-slate-500',
         };
     }
@@ -1071,9 +1205,13 @@ export default function App() {
                 <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${statusInfo.dotClass.includes('animate-pulse') ? 'bg-cyan-400 animate-ping' : statusInfo.dotClass}`}></span>
                 <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${statusInfo.dotClass.split(' ')[0]}`}></span>
               </div>
-              <div className="flex flex-col min-w-0">
+              <div className="flex flex-col min-w-0 justify-center">
                 <span className="text-xs font-bold text-white tracking-wide truncate">{statusInfo.text}</span>
-                <span className="text-[9px] text-slate-400 font-mono leading-none mt-0.5 uppercase tracking-wider block truncate">{statusInfo.subText}</span>
+                {statusInfo.subText ? (
+                  <span className="text-[9px] text-slate-400 font-mono leading-none mt-0.5 uppercase tracking-wider block truncate">
+                    {statusInfo.subText}
+                  </span>
+                ) : null}
               </div>
             </div>
 
@@ -1213,14 +1351,14 @@ export default function App() {
             </div>
           )}
 
-          <div className="flex flex-col max-lg:order-4">
+          <div className="flex flex-col max-lg:order-4 gap-3">
             <RpmChart
               samples={activeRecord ? activeRecord.samples : []}
               activeLabel={
                 activeRecord
                   ? `${activeRecord.name} (${activeRecord.timestamp})`
                   : (deviceState === DeviceState.LOADED_READY
-                      ? '裝載就緒（曲線已歸零），等待發射...'
+                      ? '裝載就緒，等待發射...'
                       : deviceState === DeviceState.SPINNING_LOADED
                       ? '裝載中預轉，等待發射...'
                       : deviceState === DeviceState.WAIT_LOAD
@@ -1241,22 +1379,20 @@ export default function App() {
           <div className="bg-slate-950/60 border border-slate-900 rounded-2xl p-5 flex flex-col items-center text-center relative overflow-hidden shadow-xl max-lg:order-3">
             <div className="flex items-center justify-between w-full mb-4">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest text-left">
-                極速遙測顯示 (Peak Telemetry)
+                極速顯示器
               </h2>
               {/* 狀態 Badge (0x81 State) */}
               <div className={`px-2.5 py-1 rounded-lg border text-[10px] font-mono font-bold flex items-center gap-1.5 ${
                 deviceState === DeviceState.WAIT_LOAD ? 'bg-slate-900 text-slate-400 border-slate-800' :
-                deviceState === DeviceState.LOADED_READY ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 animate-pulse' :
-                deviceState === DeviceState.SPINNING_LOADED ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40' :
+                (deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED) ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 animate-pulse' :
                 deviceState === DeviceState.SPINNING_LAUNCHED ? 'bg-amber-500/20 text-amber-400 border-amber-500/40 animate-pulse' :
                 'bg-purple-500/20 text-purple-400 border-purple-500/40'
               }`}>
                 <span className="w-1.5 h-1.5 rounded-full bg-current animate-ping"></span>
-                {deviceState === DeviceState.WAIT_LOAD && 'WAIT_LOAD (等待裝載)'}
-                {deviceState === DeviceState.LOADED_READY && 'LOADED_READY (就緒)'}
-                {deviceState === DeviceState.SPINNING_LOADED && 'SPINNING_LOADED (預轉)'}
-                {deviceState === DeviceState.SPINNING_LAUNCHED && 'SPINNING_LAUNCHED (發射中)'}
-                {deviceState === DeviceState.RESULT_PENDING && 'RESULT_PENDING (待傳送)'}
+                {deviceState === DeviceState.WAIT_LOAD && '等待裝載'}
+                {(deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED) && '裝載就緒'}
+                {deviceState === DeviceState.SPINNING_LAUNCHED && '發射中'}
+                {deviceState === DeviceState.RESULT_PENDING && '待傳送'}
               </div>
             </div>
 
@@ -1362,7 +1498,7 @@ export default function App() {
             {/* 數值數據欄 */}
             <div className="grid grid-cols-2 gap-3 w-full border-t border-slate-900/80 pt-4 text-xs">
               <div className="bg-[#0d0f14]/80 p-3 rounded-xl border border-slate-900 flex flex-col items-start">
-                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">最大轉速 (Max RPM)</span>
+                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">Max RPM</span>
                 <span className="text-sm font-black text-pink-400 font-mono mt-0.5">
                   {(() => {
                     const isLoaded = deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED;
@@ -1373,36 +1509,87 @@ export default function App() {
                       activeCurveInfo?.maxRpm || 0,
                       activeRecord?.maxRpm || 0
                     );
-                    return maxVal > 0 ? `${maxVal.toLocaleString()} RPM` : '--';
+                    return maxVal > 0 ? maxVal.toLocaleString() : '--';
                   })()}
                 </span>
               </div>
               <div className="bg-[#0d0f14]/80 p-3 rounded-xl border border-slate-900 flex flex-col items-start">
-                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">發射點轉速 (Launch)</span>
+                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">Launch RPM</span>
                 <span className="text-sm font-black text-amber-400 font-mono mt-0.5">
                   {(() => {
                     const isLoaded = deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED;
                     if (isLoaded) return '--';
                     const launchVal = lastLaunchEvent?.launchRpm || activeRecord?.launchRpm;
-                    return launchVal && launchVal > 0 ? `${launchVal.toLocaleString()} RPM` : '--';
+                    return launchVal && launchVal > 0 ? launchVal.toLocaleString() : '--';
                   })()}
                 </span>
               </div>
             </div>
 
-            {/* 裝載狀態與 通訊協議 */}
-            <div className="grid grid-cols-2 gap-3.5 w-full border-t border-slate-900/80 pt-3 text-xs">
-              <div className="bg-[#0d0f14]/80 p-3 rounded-xl border border-slate-900 flex flex-col items-start">
-                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">裝載狀態 (Loaded)</span>
-                <span className={`text-sm font-black font-mono mt-0.5 ${(stateFlags.loaded || deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED) ? 'text-emerald-400' : 'text-slate-400'}`}>
-                  {(stateFlags.loaded || deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED) ? 'HIGH (已裝載)' : 'LOW (未裝載)'}
-                </span>
+            {/* 發射計時：位於兩個小方框下方，寬度與兩框合計相同 */}
+            <div className="bg-[#0d0f14]/80 p-3.5 rounded-xl border border-slate-900 w-full mt-3 flex flex-col justify-between relative overflow-hidden group">
+              <div className="flex items-center justify-between w-full mb-1">
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider font-mono">
+                    發射計時
+                  </span>
+                  {isSpinTiming && (
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400"></span>
+                    </span>
+                  )}
+                </div>
               </div>
-              <div className="bg-[#0d0f14]/80 p-3 rounded-xl border border-slate-900 flex flex-col items-start">
-                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">協議版本 (Protocol)</span>
-                <span className="text-sm font-black text-cyan-400 font-mono mt-0.5">
-                  V4 (V1.15)
-                </span>
+
+              <div className="flex items-center justify-between w-full mt-0.5">
+                <div className="flex items-baseline gap-1.5">
+                  <span className={`text-2xl font-black font-mono tracking-tight ${
+                    isSpinTiming
+                      ? 'text-cyan-300 drop-shadow-[0_0_8px_rgba(6,182,212,0.4)]'
+                      : spinDurationMs > 0 || (activeRecord?.durationMs && activeRecord.durationMs > 0)
+                      ? 'text-amber-400'
+                      : 'text-slate-500'
+                  }`}>
+                    {(() => {
+                      const isLoaded = stateFlags.loaded || deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED;
+                      if (isLoaded) {
+                        return '00:00.00';
+                      }
+                      if (spinDurationMs > 0) {
+                        return formatStopwatchTime(spinDurationMs);
+                      }
+                      if (activeRecord?.durationMs && activeRecord.durationMs > 0) {
+                        return formatStopwatchTime(activeRecord.durationMs);
+                      }
+                      return '--:--.--';
+                    })()}
+                  </span>
+                </div>
+
+                {/* 右下角：計時中時顯示【停止】按鈕；非計時中時顯示狀態文字 */}
+                <div className="flex items-center">
+                  {isSpinTiming ? (
+                    <button
+                      type="button"
+                      id="btn-box-stop-spin-timer"
+                      onClick={handleStopSpinTimer}
+                      title="按下停止鍵：停止計時並將旋轉時間儲存至曲線紀錄中"
+                      className="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/60 text-xs font-bold font-mono flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 shadow-md shadow-amber-950/40"
+                    >
+                      <Square className="w-2.5 h-2.5 fill-current text-amber-400" />
+                      <span>停止</span>
+                    </button>
+                  ) : (() => {
+                    const isLoaded = stateFlags.loaded || deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED;
+                    if (isLoaded) return <span className="text-[10px] font-mono text-emerald-400 font-bold">就緒</span>;
+                    if (spinDurationMs > 0 || (activeRecord?.durationMs && activeRecord.durationMs > 0)) {
+                      return <span className="text-[10px] font-mono text-amber-400 font-bold">已儲存時間</span>;
+                    }
+                    return <span className="text-[10px] font-mono text-slate-500">等待裝載</span>;
+                  })()}
+                </div>
               </div>
             </div>
           </div>
@@ -1458,27 +1645,6 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Toast Alert Notifications */}
-      {toast && (
-        <div className="fixed bottom-16 left-1/2 -translate-x-1/2 md:bottom-8 md:right-6 md:left-auto md:translate-x-0 z-50 animate-fadeIn pointer-events-auto">
-          <div className={`flex items-center gap-2.5 px-4.5 py-3 rounded-2xl border shadow-2xl text-xs font-semibold backdrop-blur-md whitespace-nowrap ${
-            toast.type === 'success' 
-              ? 'bg-emerald-950/85 border-emerald-500/30 text-emerald-300' 
-              : toast.type === 'error' 
-                ? 'bg-rose-950/85 border-rose-500/30 text-rose-300' 
-                : toast.type === 'warning'
-                  ? 'bg-amber-950/85 border-amber-500/30 text-amber-300'
-                  : 'bg-slate-900/90 border-slate-800 text-slate-300'
-          }`}>
-            {toast.type === 'success' && <CheckCircle className="w-4 h-4 text-emerald-400 animate-pulse" />}
-            {toast.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-400 animate-pulse" />}
-            {toast.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-400 animate-pulse" />}
-            {toast.type === 'info' && <Info className="w-4 h-4 text-cyan-400" />}
-            <span>{toast.message}</span>
-          </div>
-        </div>
-      )}
-
       {/* 戰鬥歷史資料 Modal */}
       <HistoryModal
         isOpen={showHistoryModal}
@@ -1488,6 +1654,8 @@ export default function App() {
         onSelectRecord={(rec) => {
           setActiveRecord(rec);
           setIsLaunchedMode(true);
+          setSpinDurationMs(rec.durationMs || (rec.samples.length > 0 ? rec.samples[rec.samples.length - 1].timeMs : 0));
+          setIsSpinTiming(false);
           setShowHistoryModal(false);
           setToast({ message: `已載入【${rec.name}】至主畫面觀測`, type: 'info' });
         }}

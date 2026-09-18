@@ -172,7 +172,7 @@ export interface SpinRecord {
   name: string;
   maxRpm: number;
   avgRpm: number;
-  durationMs: number;
+  durationMs?: number;
   samples: RpmSample[];
   totalSamplesExpected?: number;
   maxTimeMs?: number; // MAX RPM 發生的真實相對時間 (ms)

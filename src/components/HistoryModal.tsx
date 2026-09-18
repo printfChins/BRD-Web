@@ -21,6 +21,21 @@ interface HistoryModalProps {
   onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
+const formatStopwatchTime = (ms: number | undefined | null): string => {
+  if (ms === undefined || ms === null || ms < 0) return '--:--.--';
+  const totalHundredths = Math.floor(ms / 10);
+  const hundredths = totalHundredths % 100;
+  const totalSeconds = Math.floor(totalHundredths / 100);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60);
+
+  const mm = String(minutes).padStart(2, '0');
+  const ss = String(seconds).padStart(2, '0');
+  const xx = String(hundredths).padStart(2, '0');
+
+  return `${mm}:${ss}.${xx}`;
+};
+
 export const HistoryModal: React.FC<HistoryModalProps> = ({
   isOpen,
   onClose,
@@ -120,56 +135,77 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
                 <div
                   key={record.id}
                   onClick={() => onSelectRecord(record)}
-                  className={`group border rounded-xl p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 transition-all cursor-pointer ${
+                  className={`group relative border rounded-xl p-3 sm:p-3.5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 transition-all cursor-pointer ${
                     isActive
                       ? 'bg-cyan-500/10 border-cyan-400/80 shadow-[0_0_15px_rgba(6,182,212,0.1)]'
                       : 'bg-slate-950/40 border-slate-800/80 hover:border-cyan-500/40 hover:bg-slate-950/80'
                   }`}
                 >
-                  {/* 左側：名稱/日期/CRC32 標籤 */}
-                  <div className="flex-grow min-w-0 flex flex-col">
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={record.name}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => onRenameRecord(record.id, e.target.value)}
-                        className="font-bold text-sm text-white bg-transparent border-b border-transparent hover:border-slate-700 focus:border-cyan-400 focus:outline-none transition-all w-full max-w-xs py-0.5 truncate"
-                        title="點擊修改文字為紀錄命名"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {record.timestamp}
-                      </span>
-                      {record.curveCrc32 !== undefined && (
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold ${
-                          record.crcVerified ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-                        }`}>
-                          <ShieldCheck className="w-2.5 h-2.5" />
-                          0x{record.curveCrc32.toString(16).toUpperCase()}
+                  {/* 左側 / 手機頂部：名稱/日期/CRC32 標籤 + 手機版右上角刪除按鈕 */}
+                  <div className="flex items-start justify-between w-full sm:w-auto sm:flex-grow min-w-0">
+                    <div className="flex-grow min-w-0 flex flex-col pr-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={record.name}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => onRenameRecord(record.id, e.target.value)}
+                          className="font-bold text-sm text-white bg-transparent border-b border-transparent hover:border-slate-700 focus:border-cyan-400 focus:outline-none transition-all w-full max-w-xs py-0.5 truncate"
+                          title="點擊修改文字為紀錄命名"
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          {record.timestamp}
                         </span>
-                      )}
-                      {record.sessionId && (
-                        <span className="text-[9px] font-mono text-slate-500">
-                          S#{record.sessionId}
-                        </span>
-                      )}
+                        {record.curveCrc32 !== undefined && (
+                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold ${
+                            record.crcVerified ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                          }`}>
+                            <ShieldCheck className="w-2.5 h-2.5" />
+                            0x{record.curveCrc32.toString(16).toUpperCase()}
+                          </span>
+                        )}
+                        {record.sessionId && (
+                          <span className="text-[9px] font-mono text-slate-500">
+                            S#{record.sessionId}
+                          </span>
+                        )}
+                      </div>
                     </div>
+
+                    {/* 手機版右上角刪除按鈕 */}
+                    <button
+                      type="button"
+                      id={`btn-delete-mobile-${record.id}`}
+                      onClick={(e) => onDeleteRecord(record.id, e)}
+                      className="sm:hidden shrink-0 p-1.5 -mr-1 -mt-0.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/20 active:bg-rose-950/40 transition-all cursor-pointer"
+                      title="刪除此筆戰鬥紀錄"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
 
-                  {/* 右側 / 手機底部：指標數值 + 數值右側微型曲線 + 刪除按鈕 */}
-                  <div className="flex items-center gap-2.5 sm:gap-3.5 w-full sm:w-auto justify-between sm:justify-end mt-1.5 sm:mt-0">
+                  {/* 右側 / 手機底部：指標數值 + 數值右側微型曲線 + 電腦版刪除按鈕 */}
+                  <div className="flex items-center gap-2.5 sm:gap-3.5 w-full sm:w-auto justify-between sm:justify-end mt-1 sm:mt-0">
                     {/* 數值區 */}
                     <div className="flex gap-2.5 sm:gap-3.5 text-xs font-mono shrink-0">
                       <div className="flex flex-col items-start sm:items-end">
-                        <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">MAX</span>
-                        <span className="text-rose-400 font-bold whitespace-nowrap">{record.maxRpm.toLocaleString()} RPM</span>
+                        <span className="text-[9px] text-cyan-400 uppercase font-bold tracking-wider">TIME</span>
+                        <span className={`font-bold whitespace-nowrap ${record.durationMs !== undefined && record.durationMs > 0 ? 'text-cyan-300' : 'text-slate-500'}`}>
+                          {record.durationMs !== undefined && record.durationMs > 0
+                            ? formatStopwatchTime(record.durationMs)
+                            : '--:--.--'}
+                        </span>
+                      </div>
+                      <div className="flex flex-col items-start sm:items-end">
+                        <span className="text-[9px] text-rose-400 uppercase font-bold tracking-wider">MAX</span>
+                        <span className="text-rose-400 font-bold whitespace-nowrap">{record.maxRpm.toLocaleString()}</span>
                       </div>
                       {record.launchRpm !== undefined && (
                         <div className="flex flex-col items-start sm:items-end">
                           <span className="text-[9px] text-amber-400 uppercase font-bold tracking-wider">LAUNCH</span>
-                          <span className="text-amber-300 font-bold whitespace-nowrap">{record.launchRpm.toLocaleString()} RPM</span>
+                          <span className="text-amber-300 font-bold whitespace-nowrap">{record.launchRpm.toLocaleString()}</span>
                         </div>
                       )}
                     </div>
@@ -185,8 +221,8 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
                       />
                     </div>
 
-                    {/* 刪除按鈕 */}
-                    <div className="flex items-center shrink-0">
+                    {/* 電腦版刪除按鈕 */}
+                    <div className="hidden sm:flex items-center shrink-0">
                       <button
                         type="button"
                         id={`btn-delete-${record.id}`}
