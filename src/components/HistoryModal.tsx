@@ -202,12 +202,20 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
                         <span className="text-[9px] text-rose-400 uppercase font-bold tracking-wider">MAX</span>
                         <span className="text-rose-400 font-bold whitespace-nowrap">{record.maxRpm.toLocaleString()}</span>
                       </div>
+                      {record.launchRpm !== undefined && (
+                        <div className="flex flex-col items-start sm:items-end">
+                          <span className="text-[9px] text-amber-400 uppercase font-bold tracking-wider">LAUNCH</span>
+                          <span className="text-amber-300 font-bold whitespace-nowrap">{record.launchRpm.toLocaleString()}</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* 數值右側小微型曲線 */}
                     <div className="shrink-0 px-1 py-0.5 rounded-lg bg-slate-950/50 border border-slate-900/80 shadow-inner flex items-center">
                       <Sparkline
                         samples={record.samples}
+                        launchTimeMs={record.launchTimeMs}
+                        launchRpm={record.launchRpm}
                         width={78}
                         height={26}
                       />

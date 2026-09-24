@@ -110,21 +110,17 @@ export const RpmChart: React.FC<RpmChartProps> = ({
     const rawYMax = Math.max(maxVal * 1.1, 4000);
     const yMax = Math.ceil(rawYMax / 1000) * 1000;
 
-    // 尋找最大轉速點：嚴格取自 chartSamples 中實際繪製的頂點樣本，確保標記點 100% 精準落在折線上
+    // 尋找最大轉速點 (若有給定 maxTimeMs 且可在 chartSamples 找到或精確對應)
     let maxSample: { timeMs: number; rpm: number } | null = null;
-    if (chartSamples.length > 0) {
+    if (maxTimeMs !== undefined && maxRpm !== undefined) {
+      maxSample = { timeMs: maxTimeMs, rpm: maxRpm };
+    } else {
       let bestSample = chartSamples[0];
-      for (let i = 1; i < chartSamples.length; i++) {
-        if (chartSamples[i].rpm > bestSample.rpm) {
-          bestSample = chartSamples[i];
+      chartSamples.forEach((s) => {
+        if (s.rpm > bestSample.rpm) {
+          bestSample = s;
         }
-      }
-      if (maxTimeMs !== undefined) {
-        const exactMatch = chartSamples.find((s) => s.timeMs === maxTimeMs);
-        if (exactMatch) {
-          bestSample = exactMatch;
-        }
-      }
+      });
       maxSample = bestSample;
     }
 
