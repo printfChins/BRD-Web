@@ -919,6 +919,7 @@ export default function App() {
         if (
           launchInfo?.launchTimeMs !== undefined &&
           launchInfo?.launchRpm !== undefined &&
+          launchInfo.launchRpm > 0 &&
           (activeCurveInfoRef.current ? activeCurveInfoRef.current.launchMarkerValid : true)
         ) {
           if (!finalSamples.some((s) => s.timeMs === launchInfo.launchTimeMs)) {
@@ -930,8 +931,22 @@ export default function App() {
           }
         }
 
-        const rpms = finalSamples.map((s) => s.rpm);
         const startMaxRpm = activeCurveInfoRef.current?.maxRpm || 0;
+        const startMaxTimeMs = activeCurveInfoRef.current?.maxTimeMs;
+        if (startMaxRpm > 0 && startMaxTimeMs !== undefined) {
+          const existingMaxSample = finalSamples.find((s) => s.timeMs === startMaxTimeMs);
+          if (!existingMaxSample) {
+            finalSamples.push({
+              timeMs: startMaxTimeMs,
+              rpm: startMaxRpm,
+            });
+            finalSamples.sort((a, b) => a.timeMs - b.timeMs);
+          } else {
+            existingMaxSample.rpm = Math.max(existingMaxSample.rpm, startMaxRpm);
+          }
+        }
+
+        const rpms = finalSamples.map((s) => s.rpm);
         const maxRpm = Math.max(...rpms, startMaxRpm);
         const sumRpm = rpms.reduce((acc, val) => acc + val, 0);
         const avgRpm = rpms.length > 0 ? Math.round(sumRpm / rpms.length) : 0;

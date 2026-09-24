@@ -199,10 +199,10 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
                         </span>
                       </div>
                       <div className="flex flex-col items-start sm:items-end">
-                        <span className="text-[9px] text-rose-400 uppercase font-bold tracking-wider">MAX</span>
-                        <span className="text-rose-400 font-bold whitespace-nowrap">{record.maxRpm.toLocaleString()}</span>
+                        <span className="text-[9px] text-pink-400 uppercase font-bold tracking-wider">MAX</span>
+                        <span className="text-pink-400 font-bold whitespace-nowrap">{record.maxRpm.toLocaleString()}</span>
                       </div>
-                      {record.launchRpm !== undefined && (
+                      {record.launchRpm !== undefined && record.launchRpm > 0 && (
                         <div className="flex flex-col items-start sm:items-end">
                           <span className="text-[9px] text-amber-400 uppercase font-bold tracking-wider">LAUNCH</span>
                           <span className="text-amber-300 font-bold whitespace-nowrap">{record.launchRpm.toLocaleString()}</span>
@@ -216,6 +216,8 @@ export const HistoryModal: React.FC<HistoryModalProps> = ({
                         samples={record.samples}
                         launchTimeMs={record.launchTimeMs}
                         launchRpm={record.launchRpm}
+                        maxRpm={record.maxRpm}
+                        maxTimeMs={record.maxTimeMs}
                         width={78}
                         height={26}
                       />

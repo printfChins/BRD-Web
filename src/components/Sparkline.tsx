@@ -10,6 +10,8 @@ interface SparklineProps {
   samples: RpmSample[];
   launchTimeMs?: number;
   launchRpm?: number;
+  maxRpm?: number;
+  maxTimeMs?: number;
   width?: number | string;
   height?: number;
   className?: string;
@@ -19,6 +21,8 @@ export const Sparkline: React.FC<SparklineProps> = ({
   samples,
   launchTimeMs,
   launchRpm,
+  maxRpm,
+  maxTimeMs,
   width = '100%',
   height = 38,
   className = '',
@@ -34,12 +38,28 @@ export const Sparkline: React.FC<SparklineProps> = ({
       return { points: '', areaPoints: '', launchDot: null, maxDot: null };
     }
 
-    // 合併包含 launch 點
-    let combined = [...samples];
-    if (launchTimeMs !== undefined && launchRpm !== undefined && !combined.some((s) => s.timeMs === launchTimeMs)) {
+    const hasValidLaunch =
+      launchTimeMs !== undefined &&
+      launchRpm !== undefined &&
+      launchRpm !== null &&
+      launchRpm > 0 &&
+      !isNaN(launchRpm);
+
+    const hasValidMax =
+      maxRpm !== undefined &&
+      maxRpm !== null &&
+      maxRpm > 0 &&
+      !isNaN(maxRpm);
+
+    // 合併包含 launch 點與 max 點，保證折線必穿過標記點
+    let combined = samples.map((s) => ({ ...s }));
+    if (hasValidLaunch && !combined.some((s) => s.timeMs === launchTimeMs)) {
       combined.push({ timeMs: launchTimeMs, rpm: launchRpm });
-      combined.sort((a, b) => a.timeMs - b.timeMs);
     }
+    if (hasValidMax && maxTimeMs !== undefined && !combined.some((s) => s.timeMs === maxTimeMs)) {
+      combined.push({ timeMs: maxTimeMs, rpm: maxRpm });
+    }
+    combined.sort((a, b) => a.timeMs - b.timeMs);
 
     const xValues = combined.map((s) => s.timeMs);
     const yValues = combined.map((s) => s.rpm);
@@ -65,16 +85,15 @@ export const Sparkline: React.FC<SparklineProps> = ({
     const bottomY = (baseHeight - padBottom).toFixed(1);
     const areaPts = `${firstX},${bottomY} ${pts} ${lastX},${bottomY}`;
 
-    // 發射點 Marker
+    // 發射點 Marker (若 Launch RPM 沒數值則不標點)
     let dot: { cx: number; cy: number } | null = null;
-    if (launchTimeMs !== undefined) {
-      const effRpm = launchRpm !== undefined ? launchRpm : (combined.find((s) => s.timeMs === launchTimeMs)?.rpm || 0);
-      const cx = ((launchTimeMs - xMin) / (xMax - xMin)) * baseWidth;
-      const cy = baseHeight - padBottom - ((effRpm - yMin) / (yMax - yMin)) * effectiveH;
+    if (hasValidLaunch) {
+      const cx = ((launchTimeMs! - xMin) / (xMax - xMin)) * baseWidth;
+      const cy = baseHeight - padBottom - ((launchRpm! - yMin) / (yMax - yMin)) * effectiveH;
       dot = { cx, cy };
     }
 
-    // 最大轉速點 Marker
+    // 最大轉速點 Marker (嚴格選自 combined 頂點，保證在折線上)
     let maxD: { cx: number; cy: number } | null = null;
     const maxItem = combined.reduce((prev, curr) => (curr.rpm > prev.rpm ? curr : prev), combined[0]);
     if (maxItem && maxItem.rpm > 0) {
@@ -84,7 +103,7 @@ export const Sparkline: React.FC<SparklineProps> = ({
     }
 
     return { points: pts, areaPoints: areaPts, launchDot: dot, maxDot: maxD };
-  }, [samples, launchTimeMs, launchRpm]);
+  }, [samples, launchTimeMs, launchRpm, maxRpm, maxTimeMs]);
 
   if (!samples || samples.length === 0) {
     return (
@@ -141,7 +160,7 @@ export const Sparkline: React.FC<SparklineProps> = ({
             cx={maxDot.cx}
             cy={maxDot.cy}
             r="2.5"
-            fill="#f43f5e"
+            fill="#ec4899"
             stroke="#ffffff"
             strokeWidth="0.8"
           />

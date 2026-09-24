@@ -59,21 +59,51 @@ export const RpmChart: React.FC<RpmChartProps> = ({
     ? { top: 26, right: 16, bottom: 36, left: 44 }
     : { top: 40, right: 35, bottom: 45, left: 62 };
 
-  // 建立包含 LAUNCH 發射點在內的完整圖表樣本序列，保證發射點與最高點完美錨定在折線路徑上
+  // 建立包含 LAUNCH 發射點與 MAX 最高點在內的完整圖表樣本序列，保證發射點與最高點完美錨定在折線路徑上
   const chartSamples = useMemo(() => {
     if (samples.length === 0) return [];
-    if (launchTimeMs !== undefined && launchMarkerValid !== false && launchRpm !== undefined) {
-      const existing = samples.find((s) => s.timeMs === launchTimeMs);
+
+    const merged = samples.map((s) => ({ ...s }));
+
+    // 1. 若 Launch RPM 具有有效數值且 launchMarkerValid 為真，將發射點納入樣本折線中
+    const hasValidLaunch =
+      launchTimeMs !== undefined &&
+      launchMarkerValid !== false &&
+      launchRpm !== undefined &&
+      launchRpm !== null &&
+      launchRpm > 0 &&
+      !isNaN(launchRpm);
+
+    if (hasValidLaunch) {
+      const existing = merged.find((s) => s.timeMs === launchTimeMs);
       if (!existing) {
-        const merged = [...samples, { timeMs: launchTimeMs, rpm: launchRpm }];
-        merged.sort((a, b) => a.timeMs - b.timeMs);
-        return merged;
+        merged.push({ timeMs: launchTimeMs, rpm: launchRpm });
+      } else {
+        existing.rpm = launchRpm;
       }
     }
-    return samples;
-  }, [samples, launchTimeMs, launchRpm, launchMarkerValid]);
 
-  // 計算數據極值與範圍 (保證完整涵蓋 launch 與 max 點)
+    // 2. 若有給定 MAX 轉速與時間，確保最高點納入樣本折線中，使折線必精確穿過最高點
+    const hasValidMax =
+      maxRpm !== undefined &&
+      maxRpm !== null &&
+      maxRpm > 0 &&
+      !isNaN(maxRpm);
+
+    if (hasValidMax && maxTimeMs !== undefined) {
+      const existing = merged.find((s) => s.timeMs === maxTimeMs);
+      if (!existing) {
+        merged.push({ timeMs: maxTimeMs, rpm: maxRpm });
+      } else {
+        existing.rpm = Math.max(existing.rpm, maxRpm);
+      }
+    }
+
+    merged.sort((a, b) => a.timeMs - b.timeMs);
+    return merged;
+  }, [samples, launchTimeMs, launchRpm, launchMarkerValid, maxRpm, maxTimeMs]);
+
+  // 計算數據極值與範圍 (折線圖點位直接與 chartSamples 頂點完全對齊)
   const stats = useMemo(() => {
     if (chartSamples.length === 0) {
       return {
@@ -89,43 +119,31 @@ export const RpmChart: React.FC<RpmChartProps> = ({
     const yValues = chartSamples.map((s) => s.rpm);
 
     // 曲線由有數據的第一筆時間點 (timeMs) 開始繪製，不以時間 0 為參考
-    // 同時確保 launchTimeMs 與 maxTimeMs 均完整包含在 X 軸視窗內
     const minSampleTime = Math.min(...xValues);
-    const hasLaunch = launchTimeMs !== undefined && launchMarkerValid !== false;
-    const xMin = hasLaunch ? Math.min(minSampleTime, launchTimeMs) : minSampleTime;
-    const maxSampleTime = Math.max(
-      ...xValues,
-      maxTimeMs !== undefined ? maxTimeMs : minSampleTime,
-      hasLaunch ? launchTimeMs : minSampleTime
-    );
+    const maxSampleTime = Math.max(...xValues);
+    const xMin = minSampleTime;
     const xMax = Math.max(maxSampleTime, xMin + 100);
 
     const yMin = 0; // Y 軸轉速從 0 開始
-    const maxVal = Math.max(
-      ...yValues,
-      maxRpm !== undefined ? maxRpm : 0,
-      hasLaunch && launchRpm !== undefined ? launchRpm : 0
-    );
+    const maxVal = Math.max(...yValues);
+
     // Y 軸最大刻度自動四捨五入到最近的千位數，並多留 10% 空間
     const rawYMax = Math.max(maxVal * 1.1, 4000);
     const yMax = Math.ceil(rawYMax / 1000) * 1000;
 
-    // 尋找最大轉速點 (若有給定 maxTimeMs 且可在 chartSamples 找到或精確對應)
-    let maxSample: { timeMs: number; rpm: number } | null = null;
-    if (maxTimeMs !== undefined && maxRpm !== undefined) {
-      maxSample = { timeMs: maxTimeMs, rpm: maxRpm };
-    } else {
-      let bestSample = chartSamples[0];
-      chartSamples.forEach((s) => {
-        if (s.rpm > bestSample.rpm) {
-          bestSample = s;
-        }
-      });
-      maxSample = bestSample;
+    // 尋找最大轉速點：直接從 chartSamples 中尋找實際 RPM 最高的頂點樣本
+    // 由於 chartSamples 包含所有樣本與極值點，且 linePath 是依序連線，
+    // 此 maxSample 必定 100% 精準位於 SVG linePath 折線上！
+    let bestSample = chartSamples[0];
+    for (let i = 1; i < chartSamples.length; i++) {
+      if (chartSamples[i].rpm > bestSample.rpm) {
+        bestSample = chartSamples[i];
+      }
     }
+    const maxSample = bestSample.rpm > 0 ? bestSample : null;
 
     return { xMin, xMax, yMin, yMax, maxSample };
-  }, [chartSamples, maxRpm, maxTimeMs, launchTimeMs, launchRpm, launchMarkerValid]);
+  }, [chartSamples]);
 
   // 動態寬度計算：全幅完整顯示模式，寬度完全吻合外層容器寬度，手機與電腦端 100% 自適應完整顯示
   const width = useMemo(() => {
@@ -412,41 +430,33 @@ export const RpmChart: React.FC<RpmChartProps> = ({
 
             {/* 標記發射點 (LAUNCH) 與 最高點 (MAX) 標籤（無遮擋與防重疊邏輯） */}
             {(() => {
-              // 1. MAX Sample Info
+              // 1. MAX Sample Info (最高轉速點必在線上)
               const hasMax = !!stats.maxSample;
               const maxPointX = hasMax ? getX(stats.maxSample!.timeMs) : 0;
               const maxPointY = hasMax ? getY(stats.maxSample!.rpm) : 0;
-              const maxLabelText = hasMax ? `MAX ${stats.maxSample!.rpm.toLocaleString()} RPM` : '';
+              const maxLabelText = hasMax ? `MAX ${stats.maxSample!.rpm.toLocaleString()}` : '';
               const maxBadgeW = hasMax
-                ? (isMobile ? Math.max(68, maxLabelText.length * 5.2 + 10) : Math.max(84, maxLabelText.length * 6.5 + 16))
+                ? (isMobile ? Math.max(60, maxLabelText.length * 5.4 + 10) : Math.max(76, maxLabelText.length * 6.8 + 14))
                 : 0;
               const maxHalfW = maxBadgeW / 2;
               const maxBadgeX = hasMax ? Math.max(padding.left + maxHalfW, Math.min(width - padding.right - maxHalfW, maxPointX)) : 0;
               let maxBadgeY = hasMax ? Math.max(16, maxPointY - (isMobile ? 18 : 22)) : 0;
 
-              // 2. Launch Info
-              const showLaunch = launchTimeMs !== undefined && launchMarkerValid;
-              let effectiveLaunchRpm: number | undefined = undefined;
-              if (showLaunch) {
-                effectiveLaunchRpm = launchRpm !== undefined
-                  ? launchRpm
-                  : (chartSamples.length > 0 ? (() => {
-                      let closest = chartSamples[0];
-                      for (const s of chartSamples) {
-                        if (Math.abs(s.timeMs - launchTimeMs!) < Math.abs(closest.timeMs - launchTimeMs!)) {
-                          closest = s;
-                        }
-                      }
-                      return closest.rpm;
-                    })() : undefined);
-              }
+              // 2. Launch Info: 只有當 Launch RPM 具備有效數值時才顯示點位與標籤
+              const showLaunch =
+                launchTimeMs !== undefined &&
+                launchMarkerValid !== false &&
+                launchRpm !== undefined &&
+                launchRpm !== null &&
+                launchRpm > 0 &&
+                !isNaN(launchRpm);
+
+              const effectiveLaunchRpm = showLaunch ? launchRpm : undefined;
               const launchPointX = showLaunch ? getX(launchTimeMs!) : 0;
-              const launchPointY = showLaunch ? (effectiveLaunchRpm !== undefined ? getY(effectiveLaunchRpm) : getY(0)) : 0;
-              const launchLabelText = showLaunch
-                ? (effectiveLaunchRpm !== undefined ? `LAUNCH ${effectiveLaunchRpm.toLocaleString()} RPM` : 'LAUNCH')
-                : '';
+              const launchPointY = showLaunch ? getY(effectiveLaunchRpm!) : 0;
+              const launchLabelText = showLaunch ? `LAUNCH ${effectiveLaunchRpm!.toLocaleString()}` : '';
               const launchBadgeW = showLaunch
-                ? (isMobile ? Math.max(68, launchLabelText.length * 5.2 + 10) : Math.max(84, launchLabelText.length * 6.5 + 16))
+                ? (isMobile ? Math.max(60, launchLabelText.length * 5.4 + 10) : Math.max(76, launchLabelText.length * 6.8 + 14))
                 : 0;
               const launchHalfW = launchBadgeW / 2;
               const launchBadgeX = showLaunch ? Math.max(padding.left + launchHalfW, Math.min(width - padding.right - launchHalfW, launchPointX)) : 0;
@@ -485,7 +495,7 @@ export const RpmChart: React.FC<RpmChartProps> = ({
 
               return (
                 <g>
-                  {/* 標記發射點 (Launch Point) */}
+                  {/* 標記發射點 (Launch Point: 僅在有數值時標點) */}
                   {showLaunch && (
                     <g>
                       {/* 當 Launch 標籤 elevated 時繪製連線至圓點 */}
@@ -543,7 +553,7 @@ export const RpmChart: React.FC<RpmChartProps> = ({
                     </g>
                   )}
 
-                  {/* 標記最大 RPM 點 (MAX Point) */}
+                  {/* 標記最大 RPM 點 (MAX Point: 100% 落在折線上) */}
                   {hasMax && (
                     <g>
                       {/* 當 MAX 標籤 elevated 時繪製連線至圓點 */}
@@ -566,6 +576,7 @@ export const RpmChart: React.FC<RpmChartProps> = ({
                         fill="#ec4899"
                         stroke="#ffffff"
                         strokeWidth="1.5"
+                        className="shadow-[0_0_8px_rgba(236,72,153,0.9)]"
                       />
                       {hoverIdx === null && (
                         <g transform={`translate(${maxBadgeX}, ${maxBadgeY})`}>
@@ -655,7 +666,7 @@ export const RpmChart: React.FC<RpmChartProps> = ({
               <span className="text-cyan-300 font-black text-xs sm:text-sm">{hoveredSample.rpm.toLocaleString()} RPM</span>
             </div>
             {/* 特殊點位標註 */}
-            {launchTimeMs !== undefined && Math.abs(hoveredSample.timeMs - launchTimeMs) < 15 && (
+            {launchTimeMs !== undefined && launchMarkerValid !== false && launchRpm !== undefined && launchRpm > 0 && Math.abs(hoveredSample.timeMs - launchTimeMs) < 15 && (
               <div className="pt-0.5 mt-0.5 border-t border-slate-900/80 flex items-center justify-between text-[9px] text-amber-400 font-bold">
                 <span>🚀 發射點標記</span>
                 <span>LAUNCH</span>
