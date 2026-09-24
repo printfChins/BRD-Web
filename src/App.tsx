@@ -47,6 +47,7 @@ import {
   Trash2,
   Square,
   Clock,
+  ExternalLink,
 } from 'lucide-react';
 
 interface LogEntry {
@@ -567,10 +568,22 @@ export default function App() {
                           err.message?.includes('chooser') ||
                           err.message?.includes('cancel');
 
+      const isPermissionsPolicyDisallowed =
+        err.name === 'SecurityError' ||
+        err.message?.includes('permissions policy') ||
+        err.message?.includes('disallowed by permissions policy') ||
+        err.message?.includes('Feature policy') ||
+        err.message?.includes('Permissions policy');
+
       if (isCancelled) {
         setStatus(ConnectionStatus.DISCONNECTED);
         setErrorMessage('');
         addLog('[SYSTEM] Device scan cancelled by user.');
+      } else if (isPermissionsPolicyDisallowed) {
+        console.warn('藍牙權限受限於框架限制 (Permissions Policy)：', err);
+        setStatus(ConnectionStatus.ERROR);
+        setErrorMessage('瀏覽器安全性限制：目前頁面處於內嵌預覽框架 (iframe) 中，權限政策限制藍牙。請點擊「在新分頁開啟」以獲得完整的實體藍牙連線權限！');
+        addLog('[ERROR] Bluetooth access disallowed in iframe permissions policy. Please open in a standalone tab.');
       } else {
         console.error('藍牙連線錯誤：', err);
         setStatus(ConnectionStatus.ERROR);
@@ -953,10 +966,6 @@ export default function App() {
           samples: finalSamples,
           totalSamplesExpected: expectedSampleCount,
           maxTimeMs: activeCurveInfoRef.current?.maxTimeMs,
-          launchRpm: launchInfo?.launchRpm,
-          launchTimeMs: launchInfo?.launchTimeMs,
-          launchSampleIndex: launchInfo?.launchSampleIndex,
-          launchMarkerValid: activeCurveInfoRef.current ? activeCurveInfoRef.current.launchMarkerValid : true,
           sessionId,
           curveCrc32: calculatedCrc,
           crcVerified,
@@ -1274,18 +1283,30 @@ export default function App() {
       <main id="brd-main-layout" className="flex-grow max-w-7xl w-full mx-auto p-3 sm:p-4 lg:p-6 pb-24 lg:pb-8 grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 animate-fadeIn">
         {/* 錯誤警告訊息橫條 */}
         {errorMessage && (
-          <div className="lg:col-span-12 bg-rose-950/50 border border-rose-800/80 rounded-2xl p-3.5 px-4 flex items-center justify-between gap-3 text-xs text-rose-200 shadow-lg backdrop-blur-sm animate-fadeIn max-lg:order-1">
+          <div className="lg:col-span-12 bg-rose-950/50 border border-rose-800/80 rounded-2xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-200 shadow-lg backdrop-blur-sm animate-fadeIn max-lg:order-1">
             <div className="flex items-center gap-2.5 min-w-0">
               <AlertTriangle className="w-4.5 h-4.5 text-rose-400 shrink-0" />
               <span className="font-mono">{errorMessage}</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setErrorMessage('')}
-              className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded-lg bg-rose-900/30 hover:bg-rose-900/60 transition-all cursor-pointer shrink-0"
-            >
-              關閉
-            </button>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              {(errorMessage.includes('分頁') || errorMessage.includes('權限') || errorMessage.includes('iframe')) && (
+                <button
+                  type="button"
+                  onClick={() => window.open(window.location.href, '_blank')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md active:scale-95 whitespace-nowrap"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  在新分頁開啟
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setErrorMessage('')}
+                className="text-slate-400 hover:text-white text-xs px-2.5 py-1.5 rounded-xl bg-rose-900/30 hover:bg-rose-900/60 transition-all cursor-pointer shrink-0 font-medium"
+              >
+                關閉
+              </button>
+            </div>
           </div>
         )}
 
@@ -1367,9 +1388,6 @@ export default function App() {
               }
               maxRpm={activeRecord?.maxRpm}
               maxTimeMs={activeRecord?.maxTimeMs}
-              launchRpm={activeRecord?.launchRpm}
-              launchTimeMs={activeRecord?.launchTimeMs}
-              launchMarkerValid={activeRecord?.launchMarkerValid}
             />
           </div>
         </section>
@@ -1495,39 +1513,8 @@ export default function App() {
               );
             })()}
 
-            {/* 數值數據欄 */}
-            <div className="grid grid-cols-2 gap-3 w-full border-t border-slate-900/80 pt-4 text-xs">
-              <div className="bg-[#0d0f14]/80 p-3 rounded-xl border border-slate-900 flex flex-col items-start">
-                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">Max RPM</span>
-                <span className="text-sm font-black text-pink-400 font-mono mt-0.5">
-                  {(() => {
-                    const isLoaded = deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED;
-                    if (isLoaded) return '--';
-                    const maxVal = Math.max(
-                      liveTelemetry?.maxRpm || 0,
-                      lastLaunchEvent?.maxRpmAtLaunch || 0,
-                      activeCurveInfo?.maxRpm || 0,
-                      activeRecord?.maxRpm || 0
-                    );
-                    return maxVal > 0 ? maxVal.toLocaleString() : '--';
-                  })()}
-                </span>
-              </div>
-              <div className="bg-[#0d0f14]/80 p-3 rounded-xl border border-slate-900 flex flex-col items-start">
-                <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider font-mono">Launch RPM</span>
-                <span className="text-sm font-black text-amber-400 font-mono mt-0.5">
-                  {(() => {
-                    const isLoaded = deviceState === DeviceState.LOADED_READY || deviceState === DeviceState.SPINNING_LOADED;
-                    if (isLoaded) return '--';
-                    const launchVal = lastLaunchEvent?.launchRpm || activeRecord?.launchRpm;
-                    return launchVal && launchVal > 0 ? launchVal.toLocaleString() : '--';
-                  })()}
-                </span>
-              </div>
-            </div>
-
-            {/* 發射計時：位於兩個小方框下方，寬度與兩框合計相同 */}
-            <div className="bg-[#0d0f14]/80 p-3.5 rounded-xl border border-slate-900 w-full mt-3 flex flex-col justify-between relative overflow-hidden group">
+            {/* 發射計時 */}
+            <div className="bg-[#0d0f14]/80 p-3.5 rounded-xl border border-slate-900 w-full mt-2 flex flex-col justify-between relative overflow-hidden group">
               <div className="flex items-center justify-between w-full mb-1">
                 <div className="flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-cyan-400" />

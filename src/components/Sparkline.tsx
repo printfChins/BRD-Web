@@ -29,20 +29,13 @@ export const Sparkline: React.FC<SparklineProps> = ({
   const padTop = 4;
   const padBottom = 4;
 
-  const { points, areaPoints, launchDot, maxDot } = useMemo(() => {
+  const { points, areaPoints, maxDot } = useMemo(() => {
     if (!samples || samples.length === 0) {
-      return { points: '', areaPoints: '', launchDot: null, maxDot: null };
+      return { points: '', areaPoints: '', maxDot: null };
     }
 
-    // 合併包含 launch 點
-    let combined = [...samples];
-    if (launchTimeMs !== undefined && launchRpm !== undefined && !combined.some((s) => s.timeMs === launchTimeMs)) {
-      combined.push({ timeMs: launchTimeMs, rpm: launchRpm });
-      combined.sort((a, b) => a.timeMs - b.timeMs);
-    }
-
-    const xValues = combined.map((s) => s.timeMs);
-    const yValues = combined.map((s) => s.rpm);
+    const xValues = samples.map((s) => s.timeMs);
+    const yValues = samples.map((s) => s.rpm);
 
     const xMin = Math.min(...xValues);
     const xMax = Math.max(...xValues, xMin + 1);
@@ -51,40 +44,31 @@ export const Sparkline: React.FC<SparklineProps> = ({
 
     const effectiveH = baseHeight - padTop - padBottom;
 
-    const coords = combined.map((sample) => {
+    const coords = samples.map((sample) => {
       const x = ((sample.timeMs - xMin) / (xMax - xMin)) * baseWidth;
       const y = baseHeight - padBottom - ((sample.rpm - yMin) / (yMax - yMin)) * effectiveH;
       return { x, y, sample };
     });
 
-    const pts = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+    const pts = coords.map((c) => `${c.x},${c.y}`).join(' ');
 
     // 區域漸層多邊形
-    const firstX = coords[0].x.toFixed(1);
-    const lastX = coords[coords.length - 1].x.toFixed(1);
-    const bottomY = (baseHeight - padBottom).toFixed(1);
+    const firstX = coords[0].x;
+    const lastX = coords[coords.length - 1].x;
+    const bottomY = baseHeight - padBottom;
     const areaPts = `${firstX},${bottomY} ${pts} ${lastX},${bottomY}`;
 
-    // 發射點 Marker
-    let dot: { cx: number; cy: number } | null = null;
-    if (launchTimeMs !== undefined) {
-      const effRpm = launchRpm !== undefined ? launchRpm : (combined.find((s) => s.timeMs === launchTimeMs)?.rpm || 0);
-      const cx = ((launchTimeMs - xMin) / (xMax - xMin)) * baseWidth;
-      const cy = baseHeight - padBottom - ((effRpm - yMin) / (yMax - yMin)) * effectiveH;
-      dot = { cx, cy };
-    }
-
-    // 最大轉速點 Marker
+    // 最大轉速點 Marker：直接取自實際坐標點陣列中的最大頂點，保證 100% 落在折線上
     let maxD: { cx: number; cy: number } | null = null;
-    const maxItem = combined.reduce((prev, curr) => (curr.rpm > prev.rpm ? curr : prev), combined[0]);
-    if (maxItem && maxItem.rpm > 0) {
-      const cx = ((maxItem.timeMs - xMin) / (xMax - xMin)) * baseWidth;
-      const cy = baseHeight - padBottom - ((maxItem.rpm - yMin) / (yMax - yMin)) * effectiveH;
-      maxD = { cx, cy };
+    if (coords.length > 0) {
+      const maxCoord = coords.reduce((prev, curr) => (curr.sample.rpm > prev.sample.rpm ? curr : prev), coords[0]);
+      if (maxCoord && maxCoord.sample.rpm > 0) {
+        maxD = { cx: maxCoord.x, cy: maxCoord.y };
+      }
     }
 
-    return { points: pts, areaPoints: areaPts, launchDot: dot, maxDot: maxD };
-  }, [samples, launchTimeMs, launchRpm]);
+    return { points: pts, areaPoints: areaPts, maxDot: maxD };
+  }, [samples]);
 
   if (!samples || samples.length === 0) {
     return (
@@ -135,7 +119,7 @@ export const Sparkline: React.FC<SparklineProps> = ({
           points={points}
         />
 
-        {/* Max RPM 標記點 (粉紅) */}
+        {/* Max RPM 標記點 (粉紅) - 精準落在曲線上 */}
         {maxDot && (
           <circle
             cx={maxDot.cx}
@@ -144,18 +128,6 @@ export const Sparkline: React.FC<SparklineProps> = ({
             fill="#f43f5e"
             stroke="#ffffff"
             strokeWidth="0.8"
-          />
-        )}
-
-        {/* Launch 標記點 (金黃) */}
-        {launchDot && (
-          <circle
-            cx={launchDot.cx}
-            cy={launchDot.cy}
-            r="3"
-            fill="#fbbf24"
-            stroke="#0f172a"
-            strokeWidth="1"
           />
         )}
       </svg>
